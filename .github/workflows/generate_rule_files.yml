@@ -1,0 +1,600 @@
+name: 生成规则文件
+
+on:
+  push:
+    branches: ['*']
+  schedule:
+    - cron: '0 21 * * *' # UTC 21:00 = 北京时间次日5:00
+
+jobs:
+  generate-rules:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 删除所有工作流运行记录
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 0
+
+      - name: 检出 Proxy 分支
+        uses: actions/checkout@v4
+        with:
+          ref: Proxy
+          fetch-depth: 0
+
+      - name: 配置环境
+        env:
+          MI_HOME: '/usr/local/bin'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          echo "PYTHON_DEPS=requests python-dateutil" >> $GITHUB_ENV
+
+      - name: 设置 Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests python-dateutil beautifulsoup4 aiohttp asyncio
+
+      - name: 执行Python脚本
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          python << 'EOF'
+          import aiohttp
+          import asyncio
+          import os
+          import re
+          import requests
+          import subprocess
+          import sys
+          import time
+          import zipfile
+          from bs4 import BeautifulSoup
+          from datetime import datetime
+          from dateutil.tz import tzutc
+          from pathlib import Path
+          from requests.adapters import HTTPAdapter
+          from requests.packages.urllib3.util.retry import Retry
+
+          # === 配置参数 ===
+          MI_HOME = os.environ.get('MI_HOME', '/usr/local/bin')
+
+          # === 路径配置 ===
+          TEMP_DIR = Path("temp")
+          CACHE_DIR = Path("temp/cache")
+          SITE_DIR = Path("rules/site")
+          IP_DIR = Path("rules/ip")
+
+          # === 自定义异常 ===
+          class WorkflowError(Exception):
+              """工作流处理异常基类"""
+              def __init__(self, message, detail=None):
+                  super().__init__(f"[ERROR] {message}")
+                  self.detail = detail
+              def __str__(self):
+                  return f"{self.args[0]} (Detail: {self.detail})" if self.detail else self.args[0]
+
+          def setup_environment():
+              TEMP_DIR.mkdir(parents=True, exist_ok=True)
+              CACHE_DIR.mkdir(parents=True, exist_ok=True)
+              SITE_DIR.mkdir(parents=True, exist_ok=True)
+              IP_DIR.mkdir(parents=True, exist_ok=True)
+
+          def download_file(url, target_path):
+              try:
+                  r = requests.get(url, timeout=10)
+                  r.raise_for_status()
+                  if target_path.suffix == '.zip':
+                      target_path.write_bytes(r.content)
+                  else:
+                      target_path.write_text(r.text)
+              except Exception as e:
+                  raise WorkflowError(f"下载失败： {target_path.name} - {str(e)}")
+
+          def download_resources():
+              """统一资源下载入口"""
+              resources = {
+                  "temp": [
+                      ("https://github.com/MetaCubeX/meta-rules-dat/archive/refs/heads/meta.zip", "meta.zip"),
+                      ("https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/category-httpdns-cn.list", "httpdns_1.list"),
+                      ("https://testingcf.jsdelivr.net/gh/QingRex/LoonKissSurge@main/Surge/%E6%8B%A6%E6%88%AAHTTPDNS.sgmodule", "httpdns_2.list"),
+                      ("https://testingcf.jsdelivr.net/gh/hagezi/dns-blocklists@main/wildcard/multi.txt", "dns-blocklists.list"),
+                  ],
+                  "site": [],
+              }
+
+              # 批量下载资源
+              try:
+                  # 下载临时文件
+                  for url, filename in resources["temp"]:
+                      download_file(url, TEMP_DIR / filename)
+
+              except Exception as e:
+                  raise WorkflowError(f"资源下载失败: {str(e)}")
+
+              try:
+                  # 处理 meta.zip 文件
+                  meta_zip_path = TEMP_DIR / "meta.zip"
+
+                  if not meta_zip_path.exists():
+                      raise FileNotFoundError(f"meta.zip 不存在: {meta_zip_path}")
+                  if meta_zip_path.stat().st_size == 0:
+                      raise ValueError("meta.zip 文件为空")
+
+                  print("正在解压 meta.zip...")
+                  try:
+                      with zipfile.ZipFile(meta_zip_path, 'r') as zip_ref:
+                          zip_ref.extractall(str(TEMP_DIR))  # 直接解压到TEMP_DIR
+                  except zipfile.BadZipFile:
+                      raise RuntimeError(
+                          f"meta.zip文件损坏或不是有效的ZIP文件: {meta_zip_path}"
+                      )
+              except Exception as e:
+                  raise WorkflowError(f"meta.zip 解压失败: {str(e)}")
+
+          async def generate_base():
+              try:
+                  # 基础规则处理
+                  geo_not_cn = set((TEMP_DIR / "meta-rules-dat-meta/geo/geosite/geolocation-!cn.list").read_text().splitlines())
+                  gfw = set((TEMP_DIR / "meta-rules-dat-meta/geo/geosite/gfw.list").read_text().splitlines())
+                  cn = set((TEMP_DIR / "meta-rules-dat-meta/geo/geosite/cn.list").read_text().splitlines())
+                  geo_cn = set((TEMP_DIR / "meta-rules-dat-meta/geo/geosite/geolocation-cn.list").read_text().splitlines())
+                  tld_cn = set((TEMP_DIR / "meta-rules-dat-meta/geo/geosite/tld-cn.list").read_text().splitlines())
+
+                  # 生成组合规则
+                  combined_not_cn = sorted((geo_not_cn | gfw) - (cn | geo_cn | tld_cn))
+                  (SITE_DIR / "!cn.list").write_text("\n".join(combined_not_cn))
+
+                  combined_cn = sorted((cn | geo_cn | tld_cn) - (geo_not_cn | gfw))
+                  (SITE_DIR / "cn.list").write_text("\n".join(combined_cn))
+
+                  combined_cn_lite = sorted((geo_not_cn | gfw) & (cn | geo_cn | tld_cn))
+                  (SITE_DIR / "cn-lite.list").write_text("\n".join(combined_cn_lite))
+
+                  # 获取中国ASN列表
+                  try:
+                      cache_file = CACHE_DIR / "cn_asns.txt"
+                      session = requests.Session()
+                      retries = Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504])
+                      session.mount('https://', HTTPAdapter(max_retries=retries))
+
+                      response = requests.get(
+                          "https://whois.ipip.net/iso/cn",
+                          timeout=30,
+                          headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6788.76 Safari/537.36',
+                              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                              'Accept-Language': 'en-US,en;q=0.5'
+                          }
+                      )
+                      # 检查HTTP请求是否成功
+                      response.raise_for_status()
+
+                      # 验证响应内容是否为空
+                      if not response.text.strip():
+                          raise ValueError("服务器返回空内容，可能页面未加载完成")
+
+                      解析HTML
+                      soup = BeautifulSoup(response.text, 'html.parser')
+                      asn_links = soup.find_all('a', href=re.compile(r'(/AS\d+|whois\.ipip\.net/AS\d+)'))
+
+                      # 提取ASN
+                      cn_asns = set()
+                      for a_tag in asn_links:
+                          href = a_tag.get('href', '')
+                          text = a_tag.text.strip()
+
+                          # 优先从href中提取，其次从文本
+                          asn_match = re.search(r'AS(\d+)', href)
+                          if not asn_match:
+                              asn_match = re.search(r'AS(\d+)', text)
+
+                          if asn_match:
+                              asn_num = f"AS{asn_match.group(1)}"
+                              cn_asns.add(asn_num)
+
+                      if not cn_asns:
+                          raise ValueError("未提取到有效ASN编号")
+
+                      cache_file.parent.mkdir(parents=True, exist_ok=True)
+                      cache_file.write_text("\n".join(sorted(cn_asns)), encoding='utf-8')
+
+                  except Exception as e:
+                      print(f"在线获取失败: {str(e)}")
+                      if cache_file.exists():
+                          print("使用缓存数据...")
+                          cn_asns = cache_file.read_text().splitlines()
+                      else:
+                          default_asn_file = Path(IP_DIR / "asn/cn.list")
+                          if default_asn_file.exists():
+                              print(f"使用默认ASN文件: {default_asn_file}")
+                              cn_asns = set(default_asn_file.read_text(encoding='utf-8').splitlines())
+                              # 保存到缓存供下次使用
+                              cache_file.write_text("\n".join(sorted(cn_asns)), encoding='utf-8')
+                          else:
+                              raise RuntimeError("ASN获取失败且无默认文件可用")
+
+                  print(f"获取到 {len(cn_asns)} 个中国ASN")
+
+                  # 合并ASN规则
+                  all_rules = set()
+                  missing_asns = []  # 存储缺失的 ASN
+                  asn_dir = TEMP_DIR / "meta-rules-dat-meta" / "asn"
+
+                  for asn in cn_asns:
+                      asn_file = asn_dir / f"{asn}.list"
+                      if not asn_file.exists():
+                          missing_asns.append(asn)  # 记录缺失的 ASN
+                          continue
+                      # 处理存在的文件
+                      try:
+                          rules = [
+                              r.strip() for r in asn_file.read_text(encoding='utf-8').splitlines()
+                              if r.strip() and not r.startswith('#')
+                          ]
+                          all_rules.update(rules)
+                      except Exception as e:
+                          print(f"处理{asn_file}时出错: {str(e)}")
+                  # 最后统一打印缺失情况
+                  if missing_asns:
+                      print(f"以下 ASN 文件缺失: {', '.join(missing_asns)}")
+                      print(f"共 {len(missing_asns)} 个 ASN 文件缺失\n")
+
+                  # 保存结果
+                  (IP_DIR / "cn.list").write_text("\n".join(sorted(all_rules)))
+                  print(f"生成 {len(all_rules)} 条 CN ASN ip 规则")
+
+                  # 更新ASN缓存
+                  cache_file.write_text("\n".join(cn_asns), encoding='utf-8')
+
+              except Exception as e:
+                  raise RuntimeError(f"基础规则生成失败: {str(e)}")
+
+          def process_httpdns_rules():
+              try:
+                  # Read httpdns_1.list
+                  httpdns1_path = TEMP_DIR / "httpdns_1.list"
+                  httpdns1_data = httpdns1_path.read_text().splitlines()
+
+                  # Read httpdns_2.list
+                  httpdns2_path = TEMP_DIR / "httpdns_2.list"
+                  httpdns2_data = httpdns2_path.read_text().splitlines()
+
+                  # 处理 httpdns_2.list 以获取站点规则
+                  site_rules = set()
+                  ip_rules = set()
+
+                  for line in httpdns2_data:
+                      line = line.strip()
+                      if not line or line.startswith('#'):
+                          continue
+
+                      # Handle DOMAIN,<domain>,REJECT lines
+                      if line.startswith('DOMAIN,') and ',REJECT' in line:
+                          parts = line.split(',')
+                          if len(parts) >= 3:
+                              domain = parts[1]
+                              # 如果域名不以 + 开头,则添加 +. 前缀版本
+                              if not domain.startswith('+'):
+                                  site_rules.add(f"+.{domain}")
+                              else:
+                                  site_rules.add(domain)
+
+                      # Handle IP-CIDR,<ip>,REJECT lines
+                      elif line.startswith('IP-CIDR,') and ',REJECT' in line:
+                          parts = line.split(',')
+                          if len(parts) >= 3:
+                              ip = parts[1]
+                              ip_rules.add(ip)
+
+                  # 与 httpdns_1.list 数据合并
+                  for line in httpdns1_data:
+                      line = line.strip()
+                      if line and not line.startswith('#'):
+                          # 如果域名不以 + 开头,则添加 +. 前缀
+                          if not line.startswith('+'):
+                              site_rules.add(f"+.{line}")
+                          else:
+                              site_rules.add(line)
+
+                  # Write site rules
+                  (SITE_DIR / "httpdns.list").write_text("\n".join(sorted(site_rules)))
+                  print(f"生成 {len(site_rules)} httpdns domains")
+
+                  # Write IP rules
+                  (IP_DIR / "httpdns.list").write_text("\n".join(sorted(ip_rules)))
+                  print(f"生成 {len(ip_rules)} httpdns ip")
+
+              except Exception as e:
+                  raise WorkflowError(f"HTTPDNS 规则处理失败: {str(e)}")
+
+          def process_dns_blocklist():
+              try:
+                  raw = TEMP_DIR / "dns-blocklists.list"
+                  lines = raw.read_text().splitlines()
+                  seen = set()
+                  result = []
+                  for line in lines:
+                      line = line.strip()
+                      if line and not line.startswith("#"):
+                          # 统一处理通配符格式
+                          processed_line = line.replace("*", "+")  # 统一使用+作为通配符
+                          if processed_line not in seen:
+                              seen.add(processed_line)
+                              if line.startswith("*"):
+                                  line = "+" + line[1:]
+                              result.append(line)
+                  (SITE_DIR / "dns-blocklists-normal.list").write_text("\n".join(result))
+                  print(f"生成 {len(result)} dns-blocklists domains")
+                  raw.unlink()
+              except Exception as e:
+                  raise WorkflowError(f"dns-blocklists 处理失败: {str(e)}")
+
+          def generate_tracker_lists():
+              try:
+                  url = "https://testingcf.jsdelivr.net/gh/Tunglies/TrackersList@main/all.txt"
+                  r = requests.get(url, timeout=10)
+                  r.raise_for_status()
+
+                  lines = r.text.splitlines()
+                  ips = set()
+                  domains = set()
+                  ip_pattern = re.compile(
+                      r'^('
+                      r'(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])'  # IPv4 octet
+                      r'(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}'  # IPv4 address
+                      r'(?:/(?:[0-9]|[12][0-9]|3[0-2]))?'  # IPv4 CIDR
+                      r')|'
+                      r'('
+                      r'(?:([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|'  # Full IPv6
+                      r'(::([0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4})|'  # :: IPv6
+                      r'([0-9a-fA-F]{1,4}::([0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}))'  # Mixed
+                      r'(?:/(?:[0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8]))?'  # IPv6 CIDR
+                      r')$',
+                      re.IGNORECASE
+                  )
+
+                  for line in lines:
+                      line = line.strip()
+                      if not line or line.startswith("#"):
+                          continue
+
+                      if "://" in line:
+                          line = line.split("://", 1)[1]
+                      if "/" in line:
+                          line = line.split("/", 1)[0]
+                      if ":" in line:
+                          line = line.split(":", 1)[0]
+
+                      if ip_pattern.match(line):
+                          try:
+                              # 增强IPv4验证逻辑
+                              parts = line.split('.')
+                              if len(parts) != 4:
+                                  continue
+                              valid_octets = []
+                              for part in parts:
+                                  if not part.isdigit():
+                                      raise ValueError(f"Invalid octet: {part}")
+                                  octet = int(part)
+                                  if 0 <= octet <= 255:
+                                      valid_octets.append(str(octet))
+                              # 重新组装规范化的IP地址
+                              normalized_ip = ".".join(valid_octets)
+                              if len(valid_octets) == 4:
+                                  ips.add(normalized_ip)
+                          except Exception as e:
+                              print(f"跳过无效IP格式: {line} - {str(e)}")
+                      elif '.' in line:
+                          # 标准化域名格式并去重
+                          domain = line.lower().replace("*.", "+.")
+                          domains.add(domain)
+
+                  if domains:
+                      (SITE_DIR / "tracker.list").write_text("\n".join(sorted(domains)))
+                      print(f"生成 {len(domains)} tracker domains")
+                  else:
+                      print("未找到 tracker domains")
+                      (SITE_DIR / "tracker.list").write_text("# Empty domain list")
+
+                  if ips:
+                      (IP_DIR / "tracker.list").write_text("\n".join(sorted(ips)))
+                      print(f"生成 {len(ips)} tracker IPs")
+                  else:
+                      print("未找到 tracker IP")
+                      (IP_DIR / "tracker.list").write_text("# Empty IP list")
+
+              except Exception as e:
+                  raise WorkflowError(f"Tracker list generation failed: {str(e)}")
+
+          def install_mihomo():
+              try:
+                  for attempt in range(3):
+                      r = requests.get(
+                          "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest",
+                          headers={"Accept": "application/vnd.github.v3+json"},
+                          timeout=10
+                      )
+                      if r.status_code == 200:
+                          break
+                  else:
+                      raise WorkflowError("Failed to get release info")
+
+                  release = r.json()
+                  tag = release.get("tag_name")
+                  if not tag:
+                      raise WorkflowError("Invalid release data")
+
+                  url = f"https://github.com/MetaCubeX/mihomo/releases/download/{tag}/mihomo-linux-amd64-{tag}.gz"
+                  with requests.get(url, stream=True) as r:
+                      r.raise_for_status()
+                      with open("mihomo.gz", "wb") as f:
+                          for chunk in r.iter_content(8192):
+                              f.write(chunk)
+                  os.system("gunzip mihomo.gz")
+                  os.chmod("mihomo", 0o755)
+                  os.system(f"sudo mv mihomo {MI_HOME}")
+                  print("Mihomo 安装成功")
+              except Exception as e:
+                  raise WorkflowError(f"Mihomo 安装失败: {str(e)}")
+
+          def convert_rules():
+              rule_types = {
+                  "domain": [
+                      "!cn.list",
+                      "cn-lite.list",
+                      "cn.list",
+                      "dns-blocklists-normal.list",
+                      "httpdns.list",
+                      "tracker.list",
+                  ],
+                  "ipcidr": [
+                      "cn.list",
+                      "httpdns.list",
+                      "tracker.list"
+                  ]
+              }
+
+              for rule_type, filenames in rule_types.items():
+                  for filename in filenames:
+                      base_dir = SITE_DIR if rule_type == "domain" else IP_DIR
+                      input_path = base_dir / filename
+                      output_path = input_path.with_suffix(".mrs")
+
+                      if not input_path.exists():
+                           print(f"缺少文件: {input_path}")
+                           continue
+
+                      # 去重处理(不保留注释和空行)
+                      raw_content = input_path.read_text()
+                      unique_entries = []
+                      seen = set()
+
+                      # 增强去重逻辑
+                      for line in raw_content.splitlines():
+                          stripped = line.strip()
+                          if not stripped or stripped.startswith("#"):
+                              continue
+                          # 标准化处处理:统一小写分割注释
+                          entry_part = stripped.split('#')[0].strip().lower()  # 统一转为小写
+                          if not entry_part:
+                              continue
+                          # 处理通配符格式
+                          entry = entry_part.replace('+.', '*.').replace('+', '*')  # 统一通配符格式
+                          if entry not in seen:
+                              seen.add(entry)
+                              unique_entries.append(entry_part)  # 保留原始大小写
+
+                      content = "\n".join(unique_entries)
+
+                      if not content:
+                          print(f"空文件: {input_path}")
+                          continue
+
+                      if rule_type == "ipcidr":
+                          valid_ips = []
+                          for line in content.splitlines():
+                              line = line.strip()
+                              if line and not line.startswith("#"):
+                                  # 统一处理所有IPCIDR文件(包括ASN的cn.list)
+                                  # 保留原始CIDR格式,仅当没有掩码且是tracker.list时才补全/32
+                                  if '/' in line:
+                                      valid_ips.append(line)  # 已有CIDR格式直接保留
+                                  elif filename == "tracker.list" and line.count('.') == 3 and all(p.isdigit() and 0 <= int(p) <= 255 for p in line.split('.')):
+                                      valid_ips.append(f"{line}/32")  # 仅tracker列表补全掩码
+                                  else:
+                                      valid_ips.append(line)  # 其他情况保留原始格式
+
+                          if not valid_ips:
+                              print(f"没有有效的 IP: {filename}")
+                              output_path.write_text(f"# No valid IP addresses in {filename}")
+                              continue
+
+                          cleaned_content = "\n".join(valid_ips)
+                          if cleaned_content != content:
+                              input_path.write_text(cleaned_content)
+
+                      result = subprocess.run(
+                          ["mihomo", "convert-ruleset", rule_type, "text", str(input_path), str(output_path)],
+                          capture_output=True,
+                          text=True
+                      )
+
+                      if result.returncode != 0:
+                          print(f"转换失败: {filename}: {result.stderr}")
+                          output_path.write_text(f"# Conversion failed: {result.stderr}")
+                          continue
+
+                      print(f"转换 {input_path.name} → {output_path.name}")
+                      if output_path.stat().st_size == 0:
+                          print(f"警告!输出文件为空: {output_path}")
+
+          def git_commit():
+              try:
+                  files = list(SITE_DIR.glob("*")) + list(IP_DIR.glob("*"))
+                  subprocess.run(["git", "add", *map(str, files)], check=True)  # 直接执行，不检查空文件
+                  msg = f"自动更新: {datetime.now(tz=tzutc()).strftime('%Y-%m-%d %H:%M:%S')}"
+                  subprocess.run(["git", "commit", "--allow-empty", "-m", msg], check=True)
+                  print("Git 提交成功")
+              except Exception as e:
+                  raise WorkflowError(f"Git 提交失败: {str(e)}")
+
+          async def main():
+              try:
+                  print("启动规则生成工作流")
+                  setup_environment()
+
+                  print("下载文件..")
+                  download_resources()
+
+                  print("处理规则..")
+                  await generate_base()
+                  process_httpdns_rules()
+                  process_dns_blocklist()
+                  generate_tracker_lists()
+
+                  print("安装mihomo..")
+                  install_mihomo()
+
+                  print("转换规则..")
+                  convert_rules()
+
+                  print("提交更改..")
+                  git_commit()
+
+                  print("工作流已成功完成")
+
+              except Exception as e:  # 捕获所有剩余异常
+                  print(f"工作流失败: {repr(e)}")
+                  sys.exit(1)
+              finally:
+                  print("\n开始最后的清理..")
+                  for f in TEMP_DIR.glob("*"):
+                      try:
+                          if f.is_dir():
+                              import shutil
+                              shutil.rmtree(f)
+                          else:
+                              if f.exists():
+                                  f.unlink()
+                          print(f"清理临时文件: {f.name}")
+                      except Exception as e:
+                          print(f"清理 {f.name} 时出错: {str(e)}")
+                  print("Cleanup completed")
+
+          if __name__ == "__main__":
+              import asyncio
+              asyncio.run(main())
+          EOF
+
+      - name: 推送更改
+        run: |
+          git push --force https://${{ secrets.GH_TOKEN }}@github.com/yiteei/Share.git Proxy
+
