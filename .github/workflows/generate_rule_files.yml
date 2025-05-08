@@ -149,56 +149,40 @@ jobs:
                   geo_cn = set((TEMP_DIR / "meta-rules-dat-meta/geo/geosite/geolocation-cn.list").read_text().splitlines())
                   tld_cn = set((TEMP_DIR / "meta-rules-dat-meta/geo/geosite/tld-cn.list").read_text().splitlines())
 
-                  # 生成组合规则
-                  combined_not_cn = sorted((geo_not_cn | gfw) - (cn | geo_cn | tld_cn))
-                  (SITE_DIR / "!cn.list").write_text("\n".join(combined_not_cn))
+                  # 写入组合规则
+                  (SITE_DIR / "!cn.list").write_text("\n".join(sorted((geo_not_cn | gfw) - (cn | geo_cn | tld_cn))))
+                  (SITE_DIR / "cn.list").write_text("\n".join(sorted((cn | geo_cn | tld_cn) - (geo_not_cn | gfw))))
+                  (SITE_DIR / "cn-lite.list").write_text("\n".join(sorted((geo_not_cn | gfw) & (cn | geo_cn | tld_cn))))
 
-                  combined_cn = sorted((cn | geo_cn | tld_cn) - (geo_not_cn | gfw))
-                  (SITE_DIR / "cn.list").write_text("\n".join(combined_cn))
+                  # ASN 列表抓取及缓存
+                  cache_file = CACHE_DIR / "cn_asns.txt"
+                  cn_asns = set()
 
-                  combined_cn_lite = sorted((geo_not_cn | gfw) & (cn | geo_cn | tld_cn))
-                  (SITE_DIR / "cn-lite.list").write_text("\n".join(combined_cn_lite))
-
-                  # 获取中国ASN列表
                   try:
-                      cache_file = CACHE_DIR / "cn_asns.txt"
                       session = requests.Session()
-                      retries = Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504])
-                      session.mount('https://', HTTPAdapter(max_retries=retries))
+                      retries = Retry(total=5, backoff_factor=1, status_forcelist=[502, 503, 504])
+                      session.mount("https://", HTTPAdapter(max_retries=retries))
 
-                      response = requests.get(
+                      response = session.get(
                           "https://whois.ipip.net/iso/cn",
                           timeout=30,
-                          headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6788.76 Safari/537.36',
+                          headers={
+                              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64; x64) AppleWebKit/537.36',
                               'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                               'Accept-Language': 'en-US,en;q=0.5'
-                          }
+                         }
                       )
-                      # 检查HTTP请求是否成功
                       response.raise_for_status()
-
-                      # 验证响应内容是否为空
                       if not response.text.strip():
-                          raise ValueError("服务器返回空内容，可能页面未加载完成")
+                          raise ValueError("服务器返回空内容")
 
-                      解析HTML
                       soup = BeautifulSoup(response.text, 'html.parser')
-                      asn_links = soup.find_all('a', href=re.compile(r'(/AS\d+|whois\.ipip\.net/AS\d+)'))
-
-                      # 提取ASN
-                      cn_asns = set()
-                      for a_tag in asn_links:
-                          href = a_tag.get('href', '')
-                          text = a_tag.text.strip()
-
-                          # 优先从href中提取，其次从文本
-                          asn_match = re.search(r'AS(\d+)', href)
-                          if not asn_match:
-                              asn_match = re.search(r'AS(\d+)', text)
-
+                      for link in soup.find_all('a', href=True):
+                          href = link['href']
+                          text = link.text
+                          asn_match = re.search(r'AS(\d+)', href) or re.search(r'AS(\d+)', text)
                           if asn_match:
-                              asn_num = f"AS{asn_match.group(1)}"
-                              cn_asns.add(asn_num)
+                              cn_asns.add(f"AS{asn_match.group(1)}")
 
                       if not cn_asns:
                           raise ValueError("未提取到有效ASN编号")
@@ -207,22 +191,19 @@ jobs:
                       cache_file.write_text("\n".join(sorted(cn_asns)), encoding='utf-8')
 
                   except Exception as e:
-                      print(f"在线获取失败: {str(e)}")
+                      print(f"在线获取失败: {e}")
                       if cache_file.exists():
                           print("使用缓存数据...")
-                          cn_asns = cache_file.read_text().splitlines()
+                          cn_asns = set(cache_file.read_text(encoding='utf-8').splitlines())
                       else:
                           default_asn_file = Path(IP_DIR / "asn/cn.list")
                           if default_asn_file.exists():
                               print(f"使用默认ASN文件: {default_asn_file}")
                               cn_asns = set(default_asn_file.read_text(encoding='utf-8').splitlines())
-                              # 保存到缓存供下次使用
                               cache_file.write_text("\n".join(sorted(cn_asns)), encoding='utf-8')
                           else:
                               raise RuntimeError("ASN获取失败且无默认文件可用")
-
                   print(f"获取到 {len(cn_asns)} 个中国ASN")
-
                   # 合并ASN规则
                   all_rules = set()
                   missing_asns = []  # 存储缺失的 ASN
