@@ -106,7 +106,7 @@ jobs:
                       ("https://github.com/MetaCubeX/meta-rules-dat/archive/refs/heads/meta.zip", "meta.zip"),
                       ("https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/category-httpdns-cn.list", "httpdns_1.list"),
                       ("https://testingcf.jsdelivr.net/gh/QingRex/LoonKissSurge@main/Surge/%E6%8B%A6%E6%88%AAHTTPDNS.sgmodule", "httpdns_2.list"),
-                      ("https://testingcf.jsdelivr.net/gh/hagezi/dns-blocklists@main/wildcard/multi.txt", "dns-blocklists.list"),
+                      ("https://raw.githubusercontent.com/greatcoolge/adblockfilters1/main/rules/adblockdomain.txt", "dns-blocklists.list"),
                   ],
                   "site": [],
               }
