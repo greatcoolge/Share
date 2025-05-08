@@ -324,11 +324,11 @@ jobs:
                   for line in lines:
                       line = line.strip()
                       if line and not line.startswith("#"):
-                         # 添加 +. 前缀
-                         line = "+." + line.lower()  # 如果你不想强制小写，可以去掉 .lower()
-                         if line not in seen:
-                             seen.add(line)
-                             result.append(line)
+                          # 添加 +. 前缀
+                          line = "+." + line.lower()
+                          if line not in seen:
+                              seen.add(line)
+                              result.append(line)
                   (SITE_DIR / "dns-blocklists-normal.list").write_text("\n".join(result))
                   print(f"生成 {len(result)} dns-blocklists domains")
                   raw.unlink()
