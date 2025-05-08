@@ -317,23 +317,23 @@ jobs:
 
           def process_dns_blocklist():
               try:
-              raw = TEMP_DIR / "dns-blocklists.list"
-              lines = raw.read_text().splitlines()
-              seen = set()
-              result = []
-              for line in lines:
-                  line = line.strip()
-                  if line and not line.startswith("#"):
-                     # 添加 +. 前缀
-                     line = "+." + line.lower()  # 如果你不想强制小写，可以去掉 .lower()
-                     if line not in seen:
-                         een.add(line)
-                     result.append(line)
-              (SITE_DIR / "dns-blocklists-normal.list").write_text("\n".join(result))
-              print(f"生成 {len(result)} dns-blocklists domains")
-              raw.unlink()
-          except Exception as e:
-              raise WorkflowError(f"dns-blocklists 处理失败: {str(e)}")
+                  raw = TEMP_DIR / "dns-blocklists.list"
+                  lines = raw.read_text().splitlines()
+                  seen = set()
+                  result = []
+                  for line in lines:
+                      line = line.strip()
+                      if line and not line.startswith("#"):
+                         # 添加 +. 前缀
+                         line = "+." + line.lower()  # 如果你不想强制小写，可以去掉 .lower()
+                         if line not in seen:
+                             seen.add(line)
+                             result.append(line)
+                  (SITE_DIR / "dns-blocklists-normal.list").write_text("\n".join(result))
+                  print(f"生成 {len(result)} dns-blocklists domains")
+                  raw.unlink()
+              except Exception as e:
+                  raise WorkflowError(f"dns-blocklists 处理失败: {str(e)}")
 
           def generate_tracker_lists():
               try:
