@@ -5,10 +5,11 @@ on:
     branches: ['*']
   workflow_dispatch:
   schedule:
-    - cron: '0 21 * * *' # UTC 21:00 = 北京时间次日5:00
+    - cron: '0 21 * * *'
 
 permissions:
-  contents: write  # 关键：允许 GITHUB_TOKEN 推送内容
+  actions: write       # 允许删除 workflow 运行记录
+  contents: write      # 允许推送内容等操作
 
 jobs:
   generate-rules:
