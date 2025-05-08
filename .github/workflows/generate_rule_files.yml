@@ -1,4 +1,4 @@
-name: 生成规则文件
+name: Generate Rules
 
 on:
   push:
@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 21 * * *' # UTC 21:00 = 北京时间次日5:00
+
+permissions:
+  contents: write  # 关键：允许 GITHUB_TOKEN 推送内容
 
 jobs:
   generate-rules:
