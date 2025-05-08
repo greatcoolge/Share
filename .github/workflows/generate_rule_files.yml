@@ -3,6 +3,7 @@ name: 生成规则文件
 on:
   push:
     branches: ['*']
+  workflow_dispatch:
   schedule:
     - cron: '0 21 * * *' # UTC 21:00 = 北京时间次日5:00
 
