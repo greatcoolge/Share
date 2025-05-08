@@ -580,5 +580,5 @@ jobs:
 
       - name: 推送更改
         run: |
-          git push --force https://${{ secrets.GH_TOKEN }}@github.com/yiteei/Share.git Proxy
+          git push --force https://${{ secrets.GH_TOKEN }}@github.com/greatcoolge/Share.git Proxy
 
