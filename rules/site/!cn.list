@@ -2428,6 +2428,7 @@
 +.asminternational.org
 +.asmrbuluo.com
 +.asn-online.org
++.asobostudio.com
 +.asp-cc.com
 +.asp.net
 +.aspbjournals.org
@@ -10389,6 +10390,7 @@
 +.flickr.net
 +.flickrhivemind.net
 +.flickriver.com
++.flightsimulator.com
 +.fling.com
 +.flipboard.com
 +.flipfap.com
@@ -10508,6 +10510,7 @@
 +.forum.tvb.com
 +.forum.xinbao.de
 +.forum4hk.com
++.forza.net
 +.forzamotorsport.net
 +.forzaracingchampionship.com
 +.forzarc.com
@@ -31161,6 +31164,7 @@ firebaselogging.googleapis.com
 firebaseperusertopics-pa.googleapis.com
 firebaseremoteconfig.googleapis.com
 firstsearch.oclc.org
+flightsimulator.azureedge.net
 fontshop-prod-responsive-images.s3.amazonaws.com
 foxnewsplayer-a.akamaihd.net
 gamedownloads-rockstargames-com.akamaized.net
@@ -31263,6 +31267,7 @@ practivate.adobe.newoa
 practivate.adobe.ntp
 prd-priconne-redive.akamaized.net
 preprod-publicca.googleapis.com
+prodforza.blob.core.windows.net
 production-openaicom-storage.azureedge.net
 psg-int-centralus.cloudapp.net
 psg-int-eastus.cloudapp.net
