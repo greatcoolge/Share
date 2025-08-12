@@ -1,0 +1,58 @@
+name: Generate Rules
+
+on:
+  push:
+    branches: ['*']
+  workflow_dispatch:
+  schedule:
+    - cron: '0 21 * * *'
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  generate-rules:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出 Proxy 分支
+        uses: actions/checkout@v4
+        with:
+          ref: Proxy
+          fetch-depth: 0
+
+      - name: 配置 Git 环境
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 设置 Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 执行 Python 脚本
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: python ./main.py
+
+      - name: 推送更改
+        run: |
+          git add .
+          git commit -m "自动更新: $(date '+%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
+          git push origin Proxy
+
+      - name: 删除所有工作流运行记录
+        if: always()
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 0
