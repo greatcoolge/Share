@@ -6,7 +6,7 @@ import re
 import requests
 import shutil
 import subprocess
-mport sys
+import sys
 import tim
 import zipfile
 from bs4 import BeautifulSoup
@@ -463,6 +463,224 @@ def install_mihomo():
         raise WorkflowError(f"未知错误: {str(e)}")
 
 
+
+
+def convert_rules():
+    rule_types = {
+        "domain": [
+            "!cn.list",
+            "cn-lite.list",
+            "cn.list",
+            "dns-blocklists.list",
+            "httpdns.list",
+            "pmcdn.list",
+            "tracker.list",
+        ],
+        "ipcidr": [
+            "cn.list",
+            "httpdns.list",
+            "tracker.list"
+        ]
+    }
+
+    INVALID_DOMAIN_CHARS = set(' !@#$%^&()={}[]|\\/:;"\'<>?,~`«»¿±')
+    DOMAIN_MIN_LENGTH = 4    # 最短合法域名长度，例如 a.co
+    DOMAIN_MAX_LENGTH = 253  # RFC 标准限制
+
+    for rule_type, filenames in rule_types.items():
+        for filename in filenames:
+            base_dir = SITE_DIR if rule_type == "domain" else IP_DIR
+            input_path = base_dir / filename
+            output_path = input_path.with_suffix(".mrs")
+
+            if not input_path.exists() or input_path.stat().st_size == 0:
+                continue  # 文件不存在或为空，跳过
+
+            try:
+                raw_content = input_path.read_text(encoding='utf-8')
+                content = raw_content
+
+                if rule_type == "domain":
+                    valid_domains = []
+                    skipped_domains = []
+
+                    for line in content.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+
+                        # 检查是否含无效字符
+                        if any(char in INVALID_DOMAIN_CHARS for char in line):
+                            print(f"⚠️ 跳过包含无效字符的域名: {line}")
+                            skipped_domains.append(line)
+                            continue
+
+                        # 基础验证：长度限制，禁止连续点
+                        if (len(line) < DOMAIN_MIN_LENGTH or
+                            len(line) > DOMAIN_MAX_LENGTH or
+                            ".." in line):
+                            skipped_domains.append(line)
+                            continue
+
+                        valid_domains.append(line)
+
+                    if skipped_domains:
+                        print(f"⚠️ 跳过的无效域名: {', '.join(skipped_domains)}")
+
+                    content = "\n".join(valid_domains)
+                    input_path.write_text(content, encoding='utf-8')  # 直接覆盖原文件
+                    raw_content = content  # 用过滤后的内容进行转换
+
+                elif rule_type == "ipcidr" and content:
+                    valid_ips = []
+
+                    for line in content.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+
+                        # 已是 CIDR 格式，直接保留
+                        if '/' in line:
+                            valid_ips.append(line)
+                            continue
+
+                        # IPv4 无 CIDR，尝试添加 /32
+                        if '.' in line and ':' not in line:
+                            parts = line.split('.')
+                            if len(parts) == 4:
+                                try:
+                                    if all(0 <= int(p) <= 255 for p in parts):
+                                        valid_ips.append(f"{line}/32")
+                                        continue
+                                except ValueError:
+                                    pass
+
+                        # IPv6 无 CIDR，尝试验证并添加 /128
+                        elif ':' in line:
+                            ipv6 = line.replace("[", "").replace("]", "").lower()
+                            try:
+                                ip_obj = ipaddress.IPv6Address(ipv6)
+                                valid_ips.append(f"{ip_obj.compressed}/128")
+                                continue
+                            except ValueError:
+                                pass
+
+                        # 其他情况原样保留，留给后续处理过滤
+                        valid_ips.append(line)
+
+                    content = "\n".join(valid_ips)
+                    input_path.write_text(content, encoding='utf-8')
+                    raw_content = content
+
+                if not content:
+                    print(f"⚠️ 无有效内容: {filename}")
+                    placeholder = (
+                        f"# Auto-generated placeholder\n"
+                        f"# No valid entries found in {filename}\n"
+                        f"# Generated at {datetime.now(tz=tzutc())}"
+                    )
+                    output_path.write_text(placeholder, encoding='utf-8')
+                    continue
+
+                # 调用 mihomo 转换规则
+                result = subprocess.run(
+                    ["mihomo", "convert-ruleset", rule_type, "text", str(input_path), str(output_path)],
+                    capture_output=True,
+                    text=True
+                )
+
+                if result.returncode != 0:
+                    print(f"❌ 转换失败: {filename}: {result.stderr.strip()}")
+                    output_path.write_text(
+                        f"# Conversion failed for {filename}\n"
+                        f"# Error: {result.stderr.strip()}\n"
+                        f"# Generated at {datetime.now(tz=tzutc())}",
+                        encoding='utf-8'
+                    )
+                elif output_path.stat().st_size == 0:
+                    print(f"⚠️ 转换后文件为空: {output_path}")
+                    output_path.write_text(
+                        f"# Auto-generated placeholder\n"
+                        f"# Conversion produced empty output for {filename}\n"
+                        f"# Generated at {datetime.now(tz=tzutc())}",
+                        encoding='utf-8'
+                    )
+                else:
+                    print(f"✅ 转换成功: {input_path.name} → {output_path.name}")
+
+            except Exception as e:
+                print(f"❌ 处理文件时出错 {filename}: {str(e)}")
+                output_path.write_text(
+                    f"# Error processing {filename}\n"
+                    f"# Exception: {str(e)}\n"
+                    f"# Generated at {datetime.now(tz=tzutc())}",
+                    encoding='utf-8'
+                    )
+
+
+
+def git_commit():
+    try:
+        files = list(SITE_DIR.glob("*")) + list(IP_DIR.glob("*"))
+        if files:
+            subprocess.run(["git", "add", *map(str, files)], check=True)
+        else:
+            print("⚠️ 没有需要提交的文件")
+
+        msg = f"自动更新: {datetime.now(tz=tzutc()).strftime('%Y-%m-%d %H:%M:%S')}"
+        subprocess.run(["git", "commit", "--allow-empty", "-m", msg], check=True)
+        print("Git 提交成功")
+    except Exception as e:
+        raise WorkflowError(f"Git 提交失败: {str(e)}")
+
+async def main():
+    try:
+        print("启动规则生成工作流")
+        setup_environment()
+
+        print("下载文件..")
+        download_resources()
+
+        print("处理规则..")
+        await generate_base()
+        process_httpdns_rules()
+        process_pmcdn_rules()
+        process_dns_blocklist()
+        generate_tracker_lists()
+
+        print("安装mihomo..")
+        install_mihomo()
+
+        print("转换规则..")
+        convert_rules()
+
+        print("提交更改..")
+        git_commit()
+
+        print("工作流已成功完成")
+
+    except Exception as e:
+        print(f"工作流失败: {repr(e)}")
+        sys.exit(1)
+
+    finally:
+        print("\n开始最后的清理..")
+        import shutil
+        for f in TEMP_DIR.glob("*"):
+            try:
+                if f.is_dir():
+                    shutil.rmtree(f)
+                else:
+                    if f.exists():
+                        f.unlink()
+                print(f"清理临时文件: {f.name}")
+            except Exception as e:
+                print(f"清理 {f.name} 时出错: {str(e)}")
+        print("Cleanup completed")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
 
 
 
