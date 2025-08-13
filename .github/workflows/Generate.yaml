@@ -37,10 +37,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 拉取 Proxy 分支 ASN 文件
+      - name: 下载 Proxy 分支 ASN 文件到 main 分支
         run: |
-          git fetch --all
-          git checkout Proxy -- rules/ip/asn/cn.list
+          mkdir -p rules/ip/asn
+          wget -q https://raw.githubusercontent.com/greatcoolge/Share/Proxy/rules/ip/asn/cn.list -O rules/ip/asn/cn.list
       
       
       - name: 执行 Python 脚本
