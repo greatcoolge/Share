@@ -37,6 +37,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: 拉取 Proxy 分支 ASN 文件
+        run: |
+          git fetch origin Proxy
+          git checkout Proxy -- rules/ip/asn/cn.list
+      
+      
       - name: 执行 Python 脚本
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -47,7 +53,7 @@ jobs:
           git fetch origin Proxy
           git checkout Proxy
           # 把生成的文件从 mian 分支复制过来
-          git checkout mian -- path/to/generated/files/*
+          git checkout main -- path/to/generated/files/*
           git add .
           git commit -m "自动更新: $(date '+%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
           git push origin Proxy
