@@ -16,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 检出 mian 分支
+      - name: 检出 main 分支
         uses: actions/checkout@v4
         with:
-          ref: mian
+          ref: main
           fetch-depth: 0
 
       - name: 配置 Git 环境
