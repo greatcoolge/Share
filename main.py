@@ -213,8 +213,10 @@ async def generate_base():
                 prefixes = data.get('data', {}).get('prefixes', [])
                 
                 # 注意ripe.net数据结构，有时可能不同，请根据实际调整
-                v4_prefixes = [p['prefix'] for p in prefixes if ':' not in p.get('prefix', '')]
-                v6_prefixes = [p['prefix'] for p in prefixes if ':' in p.get('prefix', '')]
+                
+                v4_prefixes = [p['prefix'] for p in prefixes if '.' in p['prefix']]
+                
+                v6_prefixes = [p['prefix'] for p in prefixes if ':' in p['prefix']]
                 
                 all_rules.update(v4_prefixes)
                 all_rules.update(v6_prefixes)
