@@ -1,0 +1,34 @@
+name: Download ASN File
+
+on:
+  workflow_dispatch:  # 手动触发，也可以用 push、schedule 等
+
+jobs:
+  download-asn:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码（main 分支或默认分支）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 创建目标目录
+        run: mkdir -p rules/ip/asn
+
+      - name: 下载 cn.list 文件到指定目录
+        run: |
+          wget -q https://raw.githubusercontent.com/greatcoolge/Share/refs/heads/Proxy/rules/ip/asn/cn.list -O rules/ip/asn/cn.list
+          
+      - name: 查看下载文件信息
+        run: |
+          ls -l rules/ip/asn/
+          head -20 rules/ip/asn/cn.list
+
+      - name: 提交并推送更改（如果有修改）
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add rules/ip/asn/cn.list
+          git diff --cached --quiet || git commit -m "自动更新 cn.list 文件"
+          git push origin HEAD
