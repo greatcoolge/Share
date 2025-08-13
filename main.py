@@ -210,13 +210,12 @@ async def generate_base():
                 response.raise_for_status()
 
                 data = response.json()
-                prefixes = data.get('data', {}).get('prefixes', [])
+                # prefixes = data.get('data', {}).get('prefixes', [])
                 
                 # 注意ripe.net数据结构，有时可能不同，请根据实际调整
                 
-                v4_prefixes = [p['prefix'] for p in prefixes if '.' in p['prefix']]
-                
-                v6_prefixes = [p['prefix'] for p in prefixes if ':' in p['prefix']]
+                v4_prefixes = data.get('data', {}).get('prefixes', {}).get('v4', {}).get('originating', [])
+                v6_prefixes = data.get('data', {}).get('prefixes', {}).get('v6', {}).get('originating', [])
                 
                 all_rules.update(v4_prefixes)
                 all_rules.update(v6_prefixes)
