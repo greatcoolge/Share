@@ -7,7 +7,7 @@ import requests
 import shutil
 import subprocess
 import sys
-import tim
+import time
 import zipfile
 from bs4 import BeautifulSoup
 from datetime import datetime
