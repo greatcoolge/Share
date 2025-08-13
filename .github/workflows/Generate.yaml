@@ -39,7 +39,7 @@ jobs:
 
       - name: 拉取 Proxy 分支 ASN 文件
         run: |
-          git fetch origin Proxy
+          git fetch --all
           git checkout Proxy -- rules/ip/asn/cn.list
       
       
