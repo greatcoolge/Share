@@ -43,15 +43,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: python ./main.py
 
-      - name: 推送生成文件到 Proxy 分支
+      - name: 提交生成规则文件
         run: |
-          git fetch origin Proxy
-          git checkout Proxy
-          # 把生成的文件从 mian 分支复制过来
-          git checkout main -- path/to/rules/*
-          git add .
+          git add rules/ip/ rules/site/
           git commit -m "自动更新: $(date '+%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
-          git push origin Proxy
+          git push origin main
 
       - name: 删除所有工作流运行记录
         if: always()
